@@ -82,6 +82,16 @@ def send_telegram_alert(message: str, lat: float, lon: float) -> str:
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     pushbullet_key = os.getenv("PUSHBULLET_API_KEY")
 
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets"):
+            bot_token = bot_token or st.secrets.get("TELEGRAM_BOT_TOKEN")
+            chat_id = chat_id or st.secrets.get("TELEGRAM_CHAT_ID")
+            pushbullet_key = pushbullet_key or st.secrets.get("PUSHBULLET_API_KEY")
+    except Exception:
+        pass
+
+
     outputs = []
 
     if bot_token and chat_id and bot_token.strip() and chat_id.strip():
