@@ -91,8 +91,8 @@ def send_telegram_alert(message: str, lat: float, lon: float) -> str:
     except Exception:
         pass
 
-
     outputs = []
+
 
     if bot_token and chat_id and bot_token.strip() and chat_id.strip():
         try:
@@ -146,7 +146,11 @@ def send_sms_alert(message: str, lat: float, lon: float) -> str:
 
 
 # --- Tool 3: Municipal Contact Search ---
-search_tool = DuckDuckGoSearchRun()
+try:
+    search_tool = DuckDuckGoSearchRun()
+except Exception:
+    search_tool = None
+
 
 # --- ReAct Agent Prompt ---
 REACT_SYSTEM_PROMPT = """You are the HydroShield-AI Backend Municipal Dispatcher.

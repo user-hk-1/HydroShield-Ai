@@ -1,6 +1,7 @@
 streamlit
 streamlit-js-eval
-tensorflow
+torch
+torchvision
 numpy
 Pillow
 folium
@@ -12,3 +13,4 @@ langchain-core
 langchain-community
 langchain-groq
 duckduckgo-search
+ddgs
