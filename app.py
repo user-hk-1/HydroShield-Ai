@@ -763,6 +763,25 @@ else:
     weather = get_current_weather(loc["lat"], loc["lon"])
     hazard = assess_hazard(pred_class, weather)
 
+    # Initialize and append dispatch history entry
+    if "dispatch_history" not in st.session_state:
+        st.session_state.dispatch_history = []
+
+    current_entry = {
+        "timestamp": datetime.datetime.now().strftime("%I:%M:%S %p | %b %d"),
+        "hazard_label": hazard['label'],
+        "confidence": f"{confidence:.1f}%",
+        "color": hazard['color'],
+        "icon": hazard['icon'],
+        "location": loc['display'],
+        "coords": f"{loc['lat']:.6f}, {loc['lon']:.6f}",
+        "weather": f"{weather.get('temp', 'N/A')}°C | Rain: {'YES' if weather.get('is_raining') else 'NO'}",
+        "severe": ("SEVERE" in hazard['label'].upper())
+    }
+
+    if not st.session_state.dispatch_history or st.session_state.dispatch_history[0].get("timestamp") != current_entry["timestamp"]:
+        st.session_state.dispatch_history.insert(0, current_entry)
+
     col_vision, col_triage = st.columns([0.85, 1.45])
 
     with col_vision:
@@ -853,7 +872,8 @@ else:
             st.rerun()
 
     with col_triage:
-        tab_log, tab_map = st.tabs(["📝 Incident Monitoring Log", "🗺️ CCTV Exact Location"])
+        tab_log, tab_map, tab_history = st.tabs(["📝 Incident Monitoring Log", "🗺️ CCTV Location", "📜 Dispatched Audit Log"])
+
 
         # -------------------------------------------------------------
         # TAB 1: CCTV BACKEND INCIDENT LOG
@@ -899,3 +919,49 @@ else:
                     </iframe>
                 </div>
             """, unsafe_allow_html=True)
+
+        # -------------------------------------------------------------
+        # TAB 3: RECEIVED ALERT DISPATCH HISTORY
+        # -------------------------------------------------------------
+        with tab_history:
+            st.markdown("""
+                <div style="background: rgba(4, 10, 24, 0.6); padding: 0.6rem 1rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.12); margin-bottom: 0.8rem;">
+                    <div style="color: #00BFFF; font-weight: 800; font-size: 1rem;">📜 Dispatched Audit Log</div>
+                    <div style="color: #AAA; font-size: 0.8rem;">Session logs of all inspected frames and emergency Telegram dispatches.</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+
+            if not st.session_state.get("dispatch_history"):
+                st.info("No dispatch history recorded yet in this session.")
+            else:
+                for idx, log_item in enumerate(st.session_state.dispatch_history):
+                    border_color = log_item.get('color', '#00BFFF')
+                    status_badge = "🚨 DISPATCHED VIA TELEGRAM" if log_item.get('severe') else "ℹ️ MONITORED SAFE"
+                    badge_bg = "rgba(255, 59, 48, 0.2)" if log_item.get('severe') else "rgba(0, 255, 102, 0.15)"
+                    badge_fg = "#FF3B30" if log_item.get('severe') else "#00FF66"
+
+                    st.markdown(f"""
+                        <div style="
+                            background: rgba(4, 10, 24, 0.70);
+                            border: 1px solid rgba(255, 255, 255, 0.15);
+                            border-left: 5px solid {border_color};
+                            backdrop-filter: blur(40px);
+                            border-radius: 14px;
+                            padding: 0.8rem 1rem;
+                            margin-bottom: 0.8rem;
+                        ">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                <span style="color:#FFF; font-weight:800; font-size:0.95rem;">{log_item['icon']} {log_item['hazard_label']}</span>
+                                <span style="color:#888; font-size:0.75rem; font-family:monospace;">⏱️ {log_item['timestamp']}</span>
+                            </div>
+                            <div style="color:#B0C4DE; font-size:0.85rem; margin-bottom:6px;">
+                                📍 <b>Location:</b> {log_item['location']} <span style="color:#777;">({log_item['coords']})</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.8rem;">
+                                <span style="color:#AAA;">Confidence: <b style="color:#00BFFF;">{log_item['confidence']}</b> | {log_item['weather']}</span>
+                                <span style="background:{badge_bg}; color:{badge_fg}; padding:3px 10px; border-radius:12px; font-size:0.75rem; font-weight:800; border:1px solid {badge_fg}44;">{status_badge}</span>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
