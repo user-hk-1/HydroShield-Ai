@@ -1,0 +1,14 @@
+streamlit
+streamlit-js-eval
+tensorflow
+numpy
+Pillow
+folium
+streamlit-folium
+requests
+python-dotenv
+langchain
+langchain-core
+langchain-community
+langchain-groq
+duckduckgo-search

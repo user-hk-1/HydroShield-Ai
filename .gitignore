@@ -1,0 +1,6 @@
+.env
+__pycache__
+.venv
+data
+portable 
+generate_capstone_report.py
