@@ -1,9 +1,7 @@
 .env
 __pycache__
 .venv
-data
-portable 
+hydroshield.rar
 generate_capstone_report.py
 HydroShield_AI_Capstone_Report.docx
 HydroShield_AI_Capstone_Presentation.pptx
-portable.rar

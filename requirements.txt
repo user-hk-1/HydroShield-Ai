@@ -4,8 +4,6 @@ torch
 torchvision
 numpy
 Pillow
-folium
-streamlit-folium
 requests
 python-dotenv
 langchain
