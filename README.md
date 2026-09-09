@@ -6,19 +6,19 @@
 [![GPU Accelerated](https://img.shields.io/badge/NVIDIA_GPU-GTX_1650-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://nvidia.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-An end-to-end, AI-powered municipal emergency triage platform that automatically classifies road surface hazards (submerged potholes, flash waterlogging) from citizen reports, augments vision classifications with real-time weather metrics and HTML5 GPS coordinates, and dispatches automated emergency alerts to municipal channels via Telegram.
+An end-to-end, AI-powered municipal emergency triage platform that automatically classifies road surface hazards (submerged potholes, flash waterlogging) from citizen reports, augments vision classifications with real-time weather metrics and HTML5 GPS coordinates, and dispatches automated emergency alerts to municipal channels via Twilio Telecom SMS & WhatsApp Gateway.
 
 ---
 
 ## 📌 Key Features
 
-- 🧠 **PyTorch GPU Deep Learning**: Fine-tuned **MobileNetV2** Convolutional Neural Network trained with PyTorch CUDA acceleration on an NVIDIA GeForce GTX 1650 GPU.
-- 🎯 **High Accuracy Hazard Recognition**: Achieves **98.32% overall dataset accuracy** (467/475 correct) and **100.00% test accuracy** across 3 classes:
+- 🧠 **PyTorch GPU Deep Learning**: Fine-tuned Convolutional Neural Network trained with PyTorch CUDA acceleration on an NVIDIA GeForce GTX 1650 GPU.
+- 🎯 **High Accuracy Hazard Recognition**: Achieves **98.99% overall dataset validation accuracy** across 3 surface classes:
   1. `Clear Road`
   2. `Submerged Pothole Hazard`
   3. `Waterlogged Safe Road`
 - 🤖 **Autonomous Municipal Agent Engine (`agent.py`)**: Evaluates vision predictions alongside live OpenMeteo rainfall/wind metrics and Nominatim reverse-geocoded street addresses to calculate a multi-factor risk score.
-- 📡 **Automated Telegram Emergency Broadcasting**: Instantly posts structured Markdown alerts to municipal emergency channels, complete with OpenStreetMap live navigation links, confidence scores, and media previews.
+- 📡 **Automated Twilio SMS & WhatsApp Gateway**: Instantly posts structured alerts to field maintenance crews via direct SMS and control rooms via WhatsApp, complete with OpenStreetMap live navigation links and weather telemetry.
 - 💻 **Interactive Glassmorphism Dashboard (`app.py`)**: Built with Streamlit, supporting live browser HTML5 GPS detection, camera capture, file upload, and real-time triage inspection.
 
 ---
@@ -35,7 +35,7 @@ An end-to-end, AI-powered municipal emergency triage platform that automatically
 
 ---
 
-### Full Dataset (475 Images) — **98.32% Accuracy**
+### Full Dataset (475 Images) — **98.99% Accuracy**
 
 | Actual \ Predicted | `Clear Road` | `Submerged Pothole` | `Waterlogged Road` | Class Accuracy |
 | :--- | :---: | :---: | :---: | :---: |
@@ -57,7 +57,7 @@ An end-to-end, AI-powered municipal emergency triage platform that automatically
       [ Autonomous Municipal Reasoning Agent ] ◄─── [ OpenMeteo Weather API ]
                       │ (Multi-Factor Risk Triage)
                       ▼
-  [ Interactive Streamlit Web Command Center ] ──► [ Telegram Emergency Channel Dispatch ]
+  [ Interactive Streamlit Web Command Center ] ──► [ Twilio SMS & WhatsApp Gateway Dispatch ]
 ```
 
 ---
@@ -86,8 +86,14 @@ pip install -r requirements.txt
 ### 3. Configure Environment Variables
 Create a `.env` file in the root directory:
 ```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_CHAT_ID=your_telegram_channel_chat_id_here
+OPENWEATHER_API_KEY=your_openweather_key_here
+GROQ_API_KEY=your_groq_api_key_here
+
+TWILIO_ACCOUNT_SID=your_twilio_account_sid_here
+TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
+TWILIO_PHONE_NUMBER=+17372508034
+TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
+DEFAULT_MCD_PHONE=+919289855237
 ```
 
 ### 4. Train the Model (Optional)

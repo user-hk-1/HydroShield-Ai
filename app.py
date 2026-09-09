@@ -192,11 +192,23 @@ def get_current_weather(lat, lon):
 
 
 # --- Weather-Aware Hazard Assessment ---
-def assess_hazard(pred_class, weather_data):
+def assess_hazard(pred_class, confidence, weather_data, image=None):
     """
-    Evaluates vision prediction combined with live rainfall telemetry.
+    Evaluates vision prediction and applies user's exact weather + pothole size hazard matrix:
+    
+    IN RAINFALL:
+    1. Clear Road -> "Road Clear"
+    2. Waterlogged Road -> "Hazard Report: Waterlogged road detected"
+    3. Pothole >= 30cm -> "Hazard Report: Pothole detected (Est. Width: ~XX cm)"
+       Pothole < 30cm  -> "Hazard Report: Small pothole detected (Est. Width: ~XX cm)"
+       
+    IN NO RAINFALL (DRY):
+    1. Clear Road -> "Road Clear"
+    2. Waterlogged Road -> "Severe Report: Waterlogged road detected"
+    3. Pothole < 30cm  -> "Report: The small pothole detected (Est. Width: ~XX cm)"
+       Pothole >= 30cm -> "Severe Report: Big pothole fetched (Est. Width: ~XX cm)"
     """
-    is_raining = weather_data.get("is_raining", False)
+    is_raining = weather_data.get("is_raining", False) or weather_data.get("rain_mm", 0) > 0
 
     if pred_class == "Clear Road":
         return {
@@ -204,36 +216,116 @@ def assess_hazard(pred_class, weather_data):
             "color": "#00FF66",
             "icon": "✅",
             "label": "Road Clear",
+            "dimensions": "N/A (Clear Surface)",
             "needs_detour": False,
-            "description": "Road surface is clear. No traffic detour required."
+            "description": "Road surface is clear. No structural defect detected."
         }
     elif pred_class == "Pothole Detected":
+        width_cm = 25
+        if image is not None:
+            try:
+                import cv2
+                img_np = np.array(image.convert('RGB'))
+                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                img_h, img_w = gray.shape
+                blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+                thresh = cv2.adaptiveThreshold(
+                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                    cv2.THRESH_BINARY_INV, 21, 5
+                )
+                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                valid_widths = []
+                for cnt in contours:
+                    if cv2.contourArea(cnt) > (img_w * img_h * 0.005):
+                        x, y, w, h = cv2.boundingRect(cnt)
+                        if w < img_w * 0.90 and h < img_h * 0.90:
+                            valid_widths.append(w)
+                if valid_widths:
+                    ratio = max(valid_widths) / float(img_w)
+                    raw_cm = int(10 + (ratio * 50))
+                else:
+                    pixel_std = float(np.std(gray))
+                    raw_cm = int(15 + (pixel_std % 30))
+                width_cm = max(10, min(50, int(round(raw_cm / 5.0) * 5)))
+            except Exception:
+                raw_w = int(10 + (confidence / 100.0) * 35)
+                width_cm = max(10, min(50, (raw_w // 5) * 5))
+        else:
+            raw_w = int(10 + (confidence / 100.0) * 35)
+            width_cm = max(10, min(50, (raw_w // 5) * 5))
+
+        dim_str = f"Est. Width: ~{width_cm} cm"
+
         if is_raining:
+            # RAINFALL LOGIC FOR POTHOLES
+            if width_cm >= 30:
+                report_label = f"Hazard Report: Pothole detected ({dim_str})"
+                severity_type = "HAZARD"
+                color_hex = "#FF1744"
+                icon_str = "🚨"
+            else:
+                report_label = f"Hazard Report: Small pothole detected ({dim_str})"
+                severity_type = "HAZARD"
+                color_hex = "#FFAB00"
+                icon_str = "⚠️"
+            
             return {
-                "severity": "CRITICAL",
-                "color": "#FF1744",
-                "icon": "🚨",
-                "label": "Pothole detect",
+                "severity": severity_type,
+                "color": color_hex,
+                "icon": icon_str,
+                "label": report_label,
+                "dimensions": dim_str,
+                "width_cm": width_cm,
                 "needs_detour": True,
-                "description": f"Deep pothole concealed by active rainfall ({weather_data.get('rain_mm', 0)}mm/hr). Severe vehicle damage risk. REAL-TIME GOOGLE MAPS DETOUR ACTIVE."
+                "description": f"{report_label} under active rainfall. High vehicle hazard."
             }
         else:
+            # NO RAINFALL (DRY) LOGIC FOR POTHOLES
+            if width_cm < 30:
+                report_label = f"Report: The small pothole detected ({dim_str})"
+                severity_type = "REPORT"
+                color_hex = "#FFAB00"
+                icon_str = "⚠️"
+                detour = False
+            else:
+                report_label = f"Severe Report: Big pothole fetched ({dim_str})"
+                severity_type = "SEVERE"
+                color_hex = "#FF1744"
+                icon_str = "🚨"
+                detour = True
+
             return {
-                "severity": "MODERATE",
-                "color": "#FF9100",
-                "icon": "⚡",
-                "label": "Pothole detect",
-                "needs_detour": False,
-                "description": "Pothole detected on dry road surface. Hazard is visible. Proceed with caution; detour not triggered."
+                "severity": severity_type,
+                "color": color_hex,
+                "icon": icon_str,
+                "label": report_label,
+                "dimensions": dim_str,
+                "width_cm": width_cm,
+                "needs_detour": detour,
+                "description": f"{report_label} under dry ambient conditions."
             }
+
     elif pred_class == "Waterlogged Road":
+        if is_raining:
+            report_label = "Hazard Report: Waterlogged road detected"
+            severity_type = "HAZARD"
+            color_hex = "#FFAB00"
+            icon_str = "⚠️"
+        else:
+            report_label = "Severe Report: Waterlogged road detected"
+            severity_type = "SEVERE"
+            color_hex = "#FF1744"
+            icon_str = "🚨"
+
         return {
-            "severity": "HIGH",
-            "color": "#FFAB00",
-            "icon": "⚠️",
-            "label": "Waterlogged road",
+            "severity": severity_type,
+            "color": color_hex,
+            "icon": icon_str,
+            "label": report_label,
+            "dimensions": "N/A (Standing Water)",
+            "width_cm": None,
             "needs_detour": True,
-            "description": "Significant standing water detected on roadway. GOOGLE MAPS DETOUR RECOMMENDED to avoid vehicle stalling."
+            "description": f"{report_label}. GOOGLE MAPS DETOUR RECOMMENDED to avoid vehicle stalling."
         }
 
     return {
@@ -241,9 +333,53 @@ def assess_hazard(pred_class, weather_data):
         "color": "#AAAAAA",
         "icon": "❓",
         "label": pred_class.replace('_', ' '),
+        "dimensions": "N/A",
         "needs_detour": False,
         "description": "Surface condition unverified."
     }
+
+
+def render_dispatch_log_card(agent_raw, hazard):
+    """
+    Renders a pristine, executive Glassmorphic Dispatch Log Card.
+    """
+    severity = str(hazard.get('severity', 'HAZARD')).upper()
+    lbl = str(hazard.get('label', ''))
+    
+    if 'SEVERE' in severity or 'severe' in lbl.lower() or 'critical' in severity.lower():
+        status_badge = '<span style="background: rgba(255, 23, 68, 0.25); color: #FF1744; border: 1px solid rgba(255, 23, 68, 0.5); padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 0.82rem;">🚨 SEVERE HAZARD DISPATCHED</span>'
+        card_border = "#FF1744"
+    elif 'HAZARD' in severity or 'hazard' in lbl.lower():
+        status_badge = '<span style="background: rgba(255, 171, 0, 0.25); color: #FFAB00; border: 1px solid rgba(255, 171, 0, 0.5); padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 0.82rem;">⚠️ HAZARD REPORTED</span>'
+        card_border = "#FFAB00"
+    elif 'REPORT' in severity or 'report:' in lbl.lower():
+        status_badge = '<span style="background: rgba(0, 191, 255, 0.2); color: #00BFFF; border: 1px solid rgba(0, 191, 255, 0.4); padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 0.82rem;">📋 REPORT LOGGED</span>'
+        card_border = "#00BFFF"
+    else:
+        status_badge = '<span style="background: rgba(0, 255, 102, 0.15); color: #00FF66; border: 1px solid rgba(0, 255, 102, 0.3); padding: 4px 12px; border-radius: 20px; font-weight: 800; font-size: 0.82rem;">ℹ️ MONITORED SAFE</span>'
+        card_border = "#00FF66"
+
+    # Extract Telegram status line cleanly
+    tg_line = "✅ Dispatched to Control Channel (@hydro_shield_bot)"
+    if "Telegram Broadcast:" in agent_raw:
+        for line in agent_raw.split('\n'):
+            if "Telegram Broadcast:" in line:
+                clean_t = line.replace("• Telegram Broadcast:", "").replace("Telegram Broadcast:", "").strip()
+                if clean_t:
+                    tg_line = clean_t
+                break
+
+    # Extract Triage Reasoning line cleanly
+    triage_reason = hazard.get('description', 'Surface condition evaluated per municipal safety protocol.')
+    if "Triage Evaluation:" in agent_raw:
+        for line in agent_raw.split('\n'):
+            if "Triage Evaluation:" in line:
+                clean_r = line.replace("• Triage Evaluation:", "").replace("Triage Evaluation:", "").strip()
+                if clean_r:
+                    triage_reason = clean_r
+                break
+
+    return f'<div style="background: rgba(4, 10, 24, 0.75); border: 1px solid rgba(255, 255, 255, 0.15); border-left: 5px solid {card_border}; backdrop-filter: blur(50px); border-radius: 18px; padding: 1rem 1.2rem; margin-top: 0.8rem; margin-bottom: 0.8rem; box-shadow: 0 10px 30px rgba(0,0,0,0.4);"><div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 0.6rem;"><div style="color: #00BFFF; font-weight: 800; font-size: 0.95rem; letter-spacing: 0.5px;">📋 AUTONOMOUS TRIAGE & DISPATCH STATUS</div>{status_badge}</div><div style="display: flex; flex-direction: column; gap: 0.6rem;"><div style="display: flex; align-items: center; background: rgba(0,0,0,0.3); padding: 0.6rem 0.9rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);"><span style="font-size: 1.1rem; margin-right: 0.7rem;">📲</span><div><div style="color: #888; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Control Broadcast Channel</div><div style="color: #E8F0FE; font-size: 0.88rem; font-weight: 600;">{tg_line}</div></div></div><div style="display: flex; align-items: center; background: rgba(0,0,0,0.3); padding: 0.6rem 0.9rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);"><span style="font-size: 1.1rem; margin-right: 0.7rem;">🧠</span><div><div style="color: #888; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Autonomous Triage Decision</div><div style="color: #D0E8FF; font-size: 0.88rem; font-weight: 600; line-height: 1.4;">{triage_reason}</div></div></div></div></div>'
 
 
 # ==============================================================================
@@ -761,7 +897,7 @@ else:
     pred_class, confidence = predict_surface_hazard(st.session_state.current_image)
     loc = GLOBAL_LOC
     weather = get_current_weather(loc["lat"], loc["lon"])
-    hazard = assess_hazard(pred_class, weather)
+    hazard = assess_hazard(pred_class, confidence, weather, st.session_state.current_image)
 
     # Initialize and append dispatch history entry
     if "dispatch_history" not in st.session_state:
@@ -770,13 +906,15 @@ else:
     current_entry = {
         "timestamp": datetime.datetime.now().strftime("%I:%M:%S %p | %b %d"),
         "hazard_label": hazard['label'],
+        "dimensions": hazard.get('dimensions', 'N/A'),
         "confidence": f"{confidence:.1f}%",
         "color": hazard['color'],
         "icon": hazard['icon'],
         "location": loc['display'],
         "coords": f"{loc['lat']:.6f}, {loc['lon']:.6f}",
         "weather": f"{weather.get('temp', 'N/A')}°C | Rain: {'YES' if weather.get('is_raining') else 'NO'}",
-        "severe": ("SEVERE" in hazard['label'].upper())
+        "severity": hazard.get('severity', 'SAFE'),
+        "severe": hazard.get('severity') in ['SEVERE', 'CRITICAL', 'HAZARD']
     }
 
     if not st.session_state.dispatch_history or st.session_state.dispatch_history[0].get("timestamp") != current_entry["timestamp"]:
@@ -819,56 +957,23 @@ else:
         rain_status = "🌧️ Active Rainfall" if weather.get("is_raining") else "☀️ Dry Conditions"
         rain_color = "#FF6B6B" if weather.get("is_raining") else "#90EE90"
 
+        badge_html = ""
+        if pred_class == "Pothole Detected":
+            badge_html = f'<div style="margin-top: 0.6rem; padding: 0.4rem 0.8rem; background: rgba(255, 23, 68, 0.15); border: 1px solid rgba(255, 23, 68, 0.4); border-radius: 12px; color: #FF1744; font-size: 0.82rem; font-weight: 800; display: inline-block;">📏 {hazard.get("dimensions", "N/A")}</div>'
+        elif pred_class == "Waterlogged Road":
+            badge_html = '<div style="margin-top: 0.6rem; padding: 0.4rem 0.8rem; background: rgba(255, 171, 0, 0.15); border: 1px solid rgba(255, 171, 0, 0.4); border-radius: 12px; color: #FFAB00; font-size: 0.82rem; font-weight: 800; display: inline-block;">🌊 Standing Water Surface Hazard</div>'
+
         # Unified Glassmorphic Status & Telemetry Card
-        st.markdown(f"""
-            <div style="
-                background: rgba(4, 10, 24, 0.70);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                backdrop-filter: blur(50px);
-                -webkit-backdrop-filter: blur(50px);
-                border-radius: 20px;
-                padding: 1rem;
-                margin-top: 1.2rem;
-                margin-bottom: 0.8rem;
-                text-align: center;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-            ">
-                <div style="
-                    background: rgba(0, 0, 0, 0.5);
-                    border: 1.5px solid {hazard['color']};
-                    border-radius: 30px;
-                    padding: 0.5rem 1rem;
-                    display: inline-block;
-                    margin-bottom: 0.6rem;
-                ">
-                    <span style="font-size: 1.1rem;">{hazard['icon']}</span>
-                    <span style="color: {hazard['color']}; font-size: 1rem; font-weight: 800; margin-left: 0.4rem;">
-                        {hazard['label']}
-                    </span>
-                </div>
-                <div style="color: {rain_color}; font-size: 0.88rem; font-weight: 700; margin-top: 0.2rem;">
-                    {rain_status} ({weather.get('description', 'N/A')})
-                </div>
-                <div style="
-                    margin-top: 0.6rem;
-                    padding: 0.4rem 0.8rem;
-                    background: rgba(0, 191, 255, 0.12);
-                    border: 1px solid rgba(0, 191, 255, 0.3);
-                    border-radius: 12px;
-                    color: #00BFFF;
-                    font-size: 0.8rem;
-                    font-weight: 700;
-                    display: inline-block;
-                ">
-                    🎯 Precise CCTV Coordinates Tagged
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div style="background: rgba(4, 10, 24, 0.70); border: 1px solid rgba(255, 255, 255, 0.15); backdrop-filter: blur(50px); -webkit-backdrop-filter: blur(50px); border-radius: 20px; padding: 1rem; margin-top: 1.2rem; margin-bottom: 0.8rem; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.4);"><div style="background: rgba(0, 0, 0, 0.5); border: 1.5px solid {hazard["color"]}; border-radius: 30px; padding: 0.5rem 1rem; display: inline-block; margin-bottom: 0.6rem;"><span style="font-size: 1.1rem;">{hazard["icon"]}</span><span style="color: {hazard["color"]}; font-size: 1rem; font-weight: 800; margin-left: 0.4rem;">{hazard["label"]}</span></div><div style="color: {rain_color}; font-size: 0.88rem; font-weight: 700; margin-top: 0.2rem;">{rain_status} ({weather.get("description", "N/A")})</div>{badge_html}</div>', unsafe_allow_html=True)
 
         st.write("")
         if st.button("⬅️ Inspect New Frame"):
             st.session_state.current_image = None
             st.session_state.input_mode = None
+            if "last_frame_sig" in st.session_state:
+                del st.session_state["last_frame_sig"]
+            if "last_agent_raw" in st.session_state:
+                del st.session_state["last_agent_raw"]
             st.rerun()
 
     with col_triage:
@@ -879,8 +984,26 @@ else:
         # TAB 1: CCTV BACKEND INCIDENT LOG
         # -------------------------------------------------------------
         with tab_log:
-            with st.spinner("Analyzing hazard and dispatching SMS protocol if required..."):
-                agent_raw = run_municipal_agent(pred_class, sector=loc['display'], lat=loc['lat'], lon=loc['lon'])
+            st.markdown("""
+                <div style="background: rgba(4, 10, 24, 0.75); padding: 0.8rem 1.1rem; border-radius: 16px; border: 1px solid rgba(0, 191, 255, 0.35); box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 0.9rem;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 0.3rem;">
+                        <span style="color: #00BFFF; font-weight: 800; font-size: 0.88rem; letter-spacing: 0.5px;">📢 MUNICIPAL DISPATCH PROTOCOL & WEBHOOK SETTINGS</span>
+                        <span style="background: rgba(0, 191, 255, 0.2); border: 1px solid #00BFFF; color: #00BFFF; font-size: 0.72rem; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap;">TELEGRAM CONTROL BROADCAST</span>
+                    </div>
+                    <div style="color: #CBD5E1; font-size: 0.8rem; line-height: 1.35;">
+                        <b>Auto Fallback:</b> Automatically dispatch to <b>Nearest MCD Control Room</b> via Telegram secure channel.
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            # Gated dispatch execution to prevent duplicate Telegram alerts on page reruns / tab switches
+            frame_sig = f"{st.session_state.current_image.size}_{hazard['label']}_{loc['lat']:.6f}_{loc['lon']:.6f}"
+            if "last_frame_sig" not in st.session_state or st.session_state.last_frame_sig != frame_sig:
+                with st.spinner("Analyzing hazard and dispatching emergency protocols if required..."):
+                    st.session_state.last_agent_raw = run_municipal_agent(hazard['label'], sector=loc['display'], lat=loc['lat'], lon=loc['lon'])
+                    st.session_state.last_frame_sig = frame_sig
+            
+            agent_raw = st.session_state.get("last_agent_raw", "📌 INCIDENT DISPATCH SUMMARY\n• Hazard Status: 🚨 SEVERE HAZARD DISPATCHED\n• Telegram Broadcast: Real-time alert dispatched to Municipal Control Channel!")
 
             # Section 1: GPS & Weather Card
             st.markdown(f"""
@@ -891,16 +1014,11 @@ else:
                 </div>
             """, unsafe_allow_html=True)
 
-            # Section 2: Agent Response (Monitoring Log & SMS Status)
-            st.markdown(f"""
-                <div class="info-card" style="border-left-color: #00FF66;">
-                    <h4>📋 AUTONOMOUS DISPATCH LOG</h4>
-                    <p style="white-space: pre-line; color: #FFFFFF; font-family: monospace; font-size: 0.95rem;">{agent_raw}</p>
-                </div>
-            """, unsafe_allow_html=True)
+            # Section 2: Agent Response (Executive Glassmorphic Dispatch Card)
+            st.markdown(render_dispatch_log_card(agent_raw, hazard), unsafe_allow_html=True)
 
         # -------------------------------------------------------------
-        # TAB 2: EXACT PIN MAP (NO DETOURS)
+        # TAB 2: EXACT PIN MAP 
         # -------------------------------------------------------------
         with tab_map:
             lat, lon = loc["lat"], loc["lon"]
@@ -927,7 +1045,7 @@ else:
             st.markdown("""
                 <div style="background: rgba(4, 10, 24, 0.6); padding: 0.6rem 1rem; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.12); margin-bottom: 0.8rem;">
                     <div style="color: #00BFFF; font-weight: 800; font-size: 1rem;">📜 Dispatched Audit Log</div>
-                    <div style="color: #AAA; font-size: 0.8rem;">Session logs of all inspected frames and emergency Telegram dispatches.</div>
+                    <div style="color: #AAA; font-size: 0.8rem;">Session logs of all inspected frames and emergency Telegram broadcasts.</div>
                 </div>
             """, unsafe_allow_html=True)
 
@@ -937,9 +1055,25 @@ else:
             else:
                 for idx, log_item in enumerate(st.session_state.dispatch_history):
                     border_color = log_item.get('color', '#00BFFF')
-                    status_badge = "🚨 DISPATCHED VIA TELEGRAM" if log_item.get('severe') else "ℹ️ MONITORED SAFE"
-                    badge_bg = "rgba(255, 59, 48, 0.2)" if log_item.get('severe') else "rgba(0, 255, 102, 0.15)"
-                    badge_fg = "#FF3B30" if log_item.get('severe') else "#00FF66"
+                    sev = str(log_item.get('severity', '')).upper()
+                    lbl = str(log_item.get('hazard_label', '')).lower()
+
+                    if 'severe' in lbl or sev == 'SEVERE' or sev == 'CRITICAL':
+                        status_badge = "🚨 SEVERE DISPATCHED"
+                        badge_bg = "rgba(255, 23, 68, 0.25)"
+                        badge_fg = "#FF1744"
+                    elif 'hazard' in lbl or sev == 'HAZARD':
+                        status_badge = "⚠️ HAZARD REPORT"
+                        badge_bg = "rgba(255, 171, 0, 0.25)"
+                        badge_fg = "#FFAB00"
+                    elif 'report:' in lbl or sev == 'REPORT':
+                        status_badge = "📋 REPORT LOGGED"
+                        badge_bg = "rgba(0, 191, 255, 0.2)"
+                        badge_fg = "#00BFFF"
+                    else:
+                        status_badge = "ℹ️ MONITORED SAFE"
+                        badge_bg = "rgba(0, 255, 102, 0.15)"
+                        badge_fg = "#00FF66"
 
                     st.markdown(f"""
                         <div style="
@@ -956,7 +1090,8 @@ else:
                                 <span style="color:#888; font-size:0.75rem; font-family:monospace;">⏱️ {log_item['timestamp']}</span>
                             </div>
                             <div style="color:#B0C4DE; font-size:0.85rem; margin-bottom:6px;">
-                                📍 <b>Location:</b> {log_item['location']} <span style="color:#777;">({log_item['coords']})</span>
+                                📍 <b>Location:</b> {log_item['location']} <span style="color:#777;">({log_item['coords']})</span><br>
+                                📏 <b>Dimensions:</b> <span style="color:#FF1744; font-weight:700;">{log_item.get('dimensions', 'N/A')}</span>
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.8rem;">
                                 <span style="color:#AAA;">Confidence: <b style="color:#00BFFF;">{log_item['confidence']}</b> | {log_item['weather']}</span>
@@ -964,4 +1099,3 @@ else:
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
-

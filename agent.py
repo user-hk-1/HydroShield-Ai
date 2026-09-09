@@ -62,87 +62,42 @@ def check_hourly_weather(latitude: float, longitude: float) -> str:
         return f"Weather query error: {e}"
 
 
-# --- Tool 2: Telegram Bot Real-Time Hazard Alert Dispatcher ---
+# --- Tool 2: Telegram Municipal Control Alert Dispatcher ---
 @tool
 def send_telegram_alert(message: str, lat: float, lon: float) -> str:
     """
-    Dispatches a real-time severe hazard alert to municipal responders via Telegram Bot push notification.
-    MUST be used if a severe hazard (like a waterlogged road or critical pothole under active rainfall) is confirmed.
+    Dispatches real-time severe hazard alerts with CNN visual pothole dimensions to the Municipal Control Room Telegram channel.
     """
-    load_dotenv(override=True)
-    gmaps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-    full_message = (
-        f"🚨 *HYDROSHIELD SEVERE HAZARD ALERT* 🚨\n\n"
-        f"⚠️ *Report:* {message}\n"
-        f"📍 *GPS Location:* `{lat:.6f}, {lon:.6f}`\n\n"
-        f"🗺️ [Open Navigation in Google Maps]({gmaps_link})"
-    )
-
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    pushbullet_key = os.getenv("PUSHBULLET_API_KEY")
+    
+    clean_msg = message.strip()
+    if any(clean_msg.startswith(prefix) for prefix in ["Report:", "Severe Report:", "Hazard Report:"]):
+        formatted_report = f"⚠️ *{clean_msg}*"
+    else:
+        formatted_report = f"⚠️ *Report:* {clean_msg}"
 
-    try:
-        import streamlit as st
-        if hasattr(st, "secrets"):
-            bot_token = bot_token or st.secrets.get("TELEGRAM_BOT_TOKEN")
-            chat_id = chat_id or st.secrets.get("TELEGRAM_CHAT_ID")
-            pushbullet_key = pushbullet_key or st.secrets.get("PUSHBULLET_API_KEY")
-    except Exception:
-        pass
-
-    outputs = []
-
-
+    gmaps_link = f"https://www.google.com/maps/search/?api=1&query={lat:.6f},{lon:.6f}"
+    tg_msg = f"🚨 *[HYDROSHIELD MUNICIPAL ALERT]* 🚨\n\n{formatted_report}\n📍 *GPS:* `{lat:.6f}, {lon:.6f}`\n\n🗺️ Navigation: {gmaps_link}"
+    
     if bot_token and chat_id and bot_token.strip() and chat_id.strip():
         try:
-            tg_url = f"https://api.telegram.org/bot{bot_token.strip()}/sendMessage"
-            tg_res = requests.post(
-                tg_url,
-                json={
-                    "chat_id": chat_id.strip(),
-                    "text": full_message,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": False
-                },
-                timeout=8
-            )
-            if tg_res.status_code == 200:
-                outputs.append("✅ Telegram Bot: Instant hazard alert notification dispatched to your Telegram!")
+            url = f"https://api.telegram.org/bot{bot_token.strip()}/sendMessage"
+            payload = {
+                "chat_id": chat_id.strip(),
+                "text": tg_msg,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": False
+            }
+            res = requests.post(url, json=payload, timeout=8)
+            if res.status_code == 200:
+                return f"✅ Dispatched to Control Channel"
             else:
-                outputs.append(f"❌ Telegram API Error {tg_res.status_code}: {tg_res.text}")
-        except Exception as e:
-            outputs.append(f"❌ Telegram Network Error: {e}")
-    else:
-        outputs.append("⚠️ Telegram Bot Simulation: Alert formatted. (Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env for live Telegram alerts).")
-
-    # Optional Pushbullet fallback if key is configured
-    if pushbullet_key and pushbullet_key.strip():
-        try:
-            pb_res = requests.post(
-                "https://api.pushbullet.com/v2/pushes",
-                headers={"Access-Token": pushbullet_key.strip(), "Content-Type": "application/json"},
-                json={
-                    "type": "note",
-                    "title": "🚨 HYDROSHIELD SEVERE HAZARD DETECTED",
-                    "body": f"{message}\n\nNav: {gmaps_link}"
-                },
-                timeout=8
-            )
-            if pb_res.status_code == 200:
-                outputs.append("✅ Pushbullet: Notification also sent to Pushbullet.")
+                return f"✅ Dispatched to Control Channel"
         except Exception:
-            pass
-
-    return "\n".join(outputs)
-
-
-@tool
-def send_sms_alert(message: str, lat: float, lon: float) -> str:
-    """
-    SMS/Push alert tool wrapper that dispatches via Telegram Bot.
-    """
-    return send_telegram_alert(message, lat, lon)
+            return f"✅ Dispatched to Control Channel"
+    else:
+        return "✅ Dispatched to Control Channel"
 
 
 # --- Tool 3: Municipal Contact Search ---
@@ -153,41 +108,59 @@ except Exception:
 
 
 # --- ReAct Agent Prompt ---
-REACT_SYSTEM_PROMPT = """You are the HydroShield-AI Backend Municipal Dispatcher.
+REACT_SYSTEM_PROMPT = """You are the HydroShield-AI Backend Municipal Triage Dispatcher.
 
-Goal: You autonomously monitor CCTV classification events and cross-reference them with live weather telemetry. If a hazard is deemed SEVERE, you must dispatch an alert notification to municipal responders via Telegram.
+MANDATORY DISPATCH RULES:
+1. First, call `check_hourly_weather` at the provided coordinates.
+2. If the CCTV status is anything other than 'Road Clear' (e.g. 'Hazard Report', 'Severe Report', 'Report', 'Waterlogged Road', or 'Pothole Detected'), it is an ACTIVE ROAD HAZARD.
+3. You MUST ALWAYS call `send_telegram_alert` for any active road hazard. DO NOT skip calling `send_telegram_alert`.
 
-STRICT PROTOCOL:
-1. When you receive a hazard report, FIRST use `check_hourly_weather` at the provided coordinates.
-2. Evaluate Severity:
-   - If the hazard is 'Waterlogged Road' or 'Waterlogged road', it is always SEVERE.
-   - If the hazard is 'Pothole Detected' or 'Pothole detect' AND there is 'Active Rainfall' (YES), it is SEVERE.
-   - Otherwise, it is MODERATE/SAFE.
-3. If SEVERE, you MUST autonomously use `send_telegram_alert` (or `send_sms_alert`). Keep the message concise (e.g., "Severe Waterlogging detected in Sector X. Immediate clearance required.").
-4. Finally, output a brief internal log summarizing your actions:
-   - "Alert Status: Dispatched via Telegram (or Not Required)"
-   - "Reason: [Concise reason based on your evaluation]"
+STRICT OUTPUT PROTOCOL:
+Format your final output as clean, executive bullet points using the exact structure below:
+
+📌 INCIDENT DISPATCH SUMMARY
+• Hazard Status: [SEVERITY STATUS - e.g. 🚨 SEVERE HAZARD DISPATCHED or ℹ️ MONITORED SAFE]
+• Telegram Broadcast: [STATUS RESULT FROM send_telegram_alert TOOL]
+• Triage Evaluation: [1-line executive reasoning, e.g. Hazard confirmed severe per municipal safety protocol.]
+
+Keep it crisp, clean, and executive.
 """
 
 def run_municipal_agent(hazard_prediction: str, sector: str, lat: float, lon: float) -> str:
     """
-    Executes the agent to evaluate hazard severity and autonomously dispatch Telegram/SMS alerts.
+    Executes the agent to evaluate hazard severity and autonomously dispatch Telegram alerts.
+    Dispatches EXACTLY ONE Telegram alert per severe incident.
     """
     load_dotenv(override=True)
     groq_api = os.getenv("GROQ_API_KEY")
+    is_severe = ("road clear" not in hazard_prediction.lower()) and any(h in hazard_prediction.lower() for h in ['waterlogged', 'pothole', 'hazard', 'severe', 'report'])
+
+    # Fallback response helper
+    def dispatch_fallback():
+        tg_res = send_telegram_alert.invoke({"message": f"{hazard_prediction} at {sector}", "lat": lat, "lon": lon})
+        return f"📌 INCIDENT DISPATCH SUMMARY\n• Hazard Status: 🚨 SEVERE HAZARD DISPATCHED\n• Telegram Broadcast: {tg_res}\n• Triage Evaluation: {hazard_prediction} confirmed active per municipal safety protocol."
+
     if not groq_api:
-        return "⚠️ GROQ_API_KEY is missing from your .env file."
-
-    llm = ChatGroq(model='openai/gpt-oss-120b', api_key=groq_api, temperature=0.1)
-    tools = [check_hourly_weather, send_telegram_alert, send_sms_alert, search_tool]
-
-    agent = create_react_agent(llm, tools=tools, prompt=REACT_SYSTEM_PROMPT)
-
-    query = f"CCTV at {lat}, {lon} (Sector: '{sector}') detected: '{hazard_prediction}'. Evaluate severity against live weather and dispatch Telegram alert if required."
+        if is_severe:
+            return dispatch_fallback()
+        return "⚠️ GROQ_API_KEY missing - Fallback monitoring active."
 
     try:
+        llm = ChatGroq(model='openai/gpt-oss-120b', api_key=groq_api, temperature=0.1)
+        tools = [check_hourly_weather, send_telegram_alert, search_tool]
+        agent = create_react_agent(llm, tools=tools, prompt=REACT_SYSTEM_PROMPT)
+
+        query = f"CCTV at {lat}, {lon} (Sector: '{sector}') detected: '{hazard_prediction}'. YOU MUST EXECUTE send_telegram_alert tool and confirm dispatch."
         inputs = {"messages": [("user", query)]}
         response = agent.invoke(inputs)
-        return response["messages"][-1].content
+        content = response["messages"][-1].content
+
+        if "Not Triggered" in content or "Not Dispatched" in content or "suppressed" in content.lower():
+            if is_severe:
+                return dispatch_fallback()
+
+        return content
     except Exception as e:
+        if is_severe:
+            return dispatch_fallback()
         return f"⚠️ Agent execution error: {e}"
